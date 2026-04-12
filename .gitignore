@@ -26,7 +26,5 @@ research/
 # ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
 
-# ── Dist executables and release zips (distributed via GitHub Releases) ───────
-dist/*/sparrow
-dist/*/*.exe
-dist/*.zip
+# ── Dist folder (distributed via GitHub Releases) ────────────────────────────
+dist/
