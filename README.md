@@ -7,19 +7,20 @@ This fork extends the original Sparrow engine with **bin packing** (nesting onto
 
 ## Installation
 
-Download the folder matching your platform from [`dist/`](dist/) and copy all three files into your Grasshopper Libraries folder:
+1. Go to the [Releases](../../releases) page and download the zip for your platform (`mac-arm64`, `mac-x64`, or `windows-x64`).
+2. Extract and copy the three files into your Grasshopper Libraries folder
+3. Restart Rhino. A **Sparrow** tab will appear in Grasshopper with two components.
 
-Restart Rhino. A **Sparrow** tab will appear in Grasshopper with two components.
+No Rust or .NET SDK required — the compiled engine binary is included in each release.
 
 
 ## Components
 
-Both components live in the **Sparrow → Nesting** panel.
 
 
 ### Sparrow Nest  `SpNest`
 
-Nests closed planar curves onto one or more fixed-size rectangular sheets. Outputs a DataTree of nested curves, indices and transforms per sheet.
+Nests closed planar curves onto one or more fixed-size *rectangular sheets*. Outputs a DataTree of nested curves, indices and transforms per sheet.
 
 ![srtip-rh](imgs/multi-sheet-rh.png)
 ![strip-gh](imgs/multi-sheet-gh.png)
@@ -28,7 +29,7 @@ Nests closed planar curves onto one or more fixed-size rectangular sheets. Outpu
 
 ### Sparrow Strip Nest  `SpStrip`
 
-Nests closed planar curves into a strip of fixed height and variable width. Returns a flat list of nested curves.
+Nests closed planar curves into *a strip* of fixed height and *variable width*. Returns a flat list of nested curves.
 
 ![srtip-rh](imgs/strip-rh.png)
 ![strip-gh](imgs/strip-gh.png)
