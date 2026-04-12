@@ -1,107 +1,49 @@
 # SparrowGH
 
-A Grasshopper plugin for 2D irregular nesting, built on top of [Sparrow](https://github.com/JeroenGar/sparrow) - a Rust-based solver for 2D irregular strip packing problems.
+A Grasshopper plugin for 2D irregular nesting, built on top of [Sparrow](https://github.com/JeroenGar/sparrow) — a state-of-the-art Rust-based solver for 2D irregular packing problems.
 
-The plugin runs the Sparrow engine as a subprocess and bridges its JSON I/O into Grasshopper geometry.
+This fork extends the original Sparrow engine with **bin packing** (nesting onto multiple fixed-size sheets) alongside the original **strip packing** mode. Both are exposed as Grasshopper components.
 
----
 
 ## Installation
 
 Download the folder matching your platform from [`dist/`](dist/) and copy all three files into your Grasshopper Libraries folder:
 
-| Platform | Libraries folder |
-|---|---|
-| Mac (Apple Silicon) | `~/Library/Application Support/McNeel/Rhinoceros/8.0/Plug-ins/Grasshopper (b45a29b1-4343-4035-989e-044e8580d9cf)/Libraries/` |
-| Mac (Intel) | same path |
-| Windows | `%APPDATA%\Grasshopper\Libraries\` |
-
-Restart Rhino. A **Sparrow** tab will appear in Grasshopper.
-
-No Rust or .NET SDK required — the compiled engine binary is included in each platform folder.
-
----
-
-## Component
-
-**Sparrow Nest** — found under the Sparrow tab, Nesting panel.
-
-### Inputs
-
-| | Nick | Description |
-|---|---|---|
-| Curves | C | Closed planar curves to nest. Projected to XY plane automatically. |
-| StripHeight | H | Fixed height of the material strip. |
-| Angles | A | Allowed rotation angles in degrees e.g. `{0, 90, 180, 270}`. Leave empty for continuous rotation. |
-| TimeSecs | T | Optimisation time in seconds. Default 30. |
-| Spacing | Sp | Minimum gap between pieces in model units. Default 0. |
-| Run | R | Button or Toggle. Nesting fires on the rising edge (false → true). |
-
-### Outputs
-
-| | Nick | Description |
-|---|---|---|
-| NestedCurves | NC | Nested curves. |
-| Transforms | X | One Transform per curve. |
-| StripWidth | W | Optimised strip length. |
-| Density | D | Packing density [0–1]. |
-| Status | S | Progress text — connect a Panel to watch the run. |
+Restart Rhino. A **Sparrow** tab will appear in Grasshopper with two components.
 
 
-<table><tr>
-<td><img src="sparrow-rh.png" height="300"></td>
-<td><img src="sparrow-gh.png" height="300"></td>
-</tr></table>
+## Components
 
----
+Both components live in the **Sparrow → Nesting** panel.
 
-## Building from source
 
-### Requirements
+### Sparrow Nest  `SpNest`
 
-- [Rust](https://rustup.rs/) stable toolchain
-- [.NET SDK 8+](https://dot.net)
-- Rhino 7 or 8 (for the Grasshopper SDK references)
+Nests closed planar curves onto one or more fixed-size rectangular sheets. Outputs a DataTree of nested curves, indices and transforms per sheet.
 
-### Engine
+![srtip-rh](imgs/multi-sheet-rh.png)
+![strip-gh](imgs/multi-sheet-gh.png)
 
-```bash
-cd sparrow
-cargo build --release
-```
 
-Cross-platform:
 
-```bash
-rustup target add x86_64-apple-darwin
-rustup target add x86_64-pc-windows-gnu
-brew install mingw-w64  # for Windows cross-compile from macOS
+### Sparrow Strip Nest  `SpStrip`
 
-cargo build --release --target x86_64-apple-darwin
-cargo build --release --target x86_64-pc-windows-gnu
-```
+Nests closed planar curves into a strip of fixed height and variable width. Returns a flat list of nested curves.
 
-### Plugin
+![srtip-rh](imgs/strip-rh.png)
+![strip-gh](imgs/strip-gh.png)
 
-```bash
-cd SparrowGH
-./build.sh
-```
 
-Compiles `SparrowGH.gha` and installs it alongside the engine binary into your Grasshopper Libraries folder.
-
----
 
 ## Notes
 
-- The `sparrow/` folder is a fork of [JeroenGar/sparrow](https://github.com/JeroenGar/sparrow) with one addition: a `--spacing` / `-p` CLI flag that maps to `min_item_separation` in the engine config.
-- The plugin communicates with the engine via JSON files in the system temp directory. No FFI.
-- Results are cached per run — pressing Run again starts a new optimisation from scratch.
+- Disable a running component to kill the engine process immediately.
+- Results are cached — the last successful run is shown until you press Run again.
+- The engine communicates via JSON in the system temp directory. no FFI, no network.
+- For build instructions and input format details see [`README_dev.md`](README_dev.md).
 
----
 
 ## License
 
-Plugin code: MIT. 
-
+Plugin code: MIT.  
 Engine: see [`sparrow/LICENSE`](sparrow/LICENSE).

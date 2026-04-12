@@ -52,20 +52,21 @@ namespace SparrowGH.Components
         private readonly object _lock = new object();
         private List<Curve>?    _cachedCurves;
         private List<Transform>? _cachedTransforms;
+        private List<int>?      _cachedItemIds;
         private double          _cachedWidth;
         private double          _cachedDensity;
         private bool            _hasCached;
 
-        // Rising-edge detection for Run input
         private bool _prevRun;
-
-        // Background task handle (so we don't start two at once)
+        private bool _initialized;
         private Task? _bgTask;
+        private System.Threading.Timer? _ticker;
+        private volatile Process? _proc;
 
         public SparrowNestComponent()
             : base(
-                "Sparrow Nest",
-                "SpNest",
+                "Sparrow Strip Nest",
+                "SpStrip",
                 "2D irregular strip packing using the Sparrow engine.",
                 "Sparrow",
                 "Nesting")
@@ -75,22 +76,22 @@ namespace SparrowGH.Components
 
         protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
-            pManager.AddCurveParameter("Curves", "C",
-                "Closed planar curves to nest. Projected to XY plane automatically.",
-                GH_ParamAccess.list);
-            pManager.AddNumberParameter("StripHeight", "H",
+            pManager.AddNumberParameter("strip_h", "H",
                 "Fixed height of the material strip.",
                 GH_ParamAccess.item, 1000.0);
-            pManager.AddNumberParameter("Angles", "A",
+            pManager.AddCurveParameter("crvs", "C",
+                "Closed planar curves to nest. Projected to XY plane automatically.",
+                GH_ParamAccess.list);
+            pManager.AddNumberParameter("rotations", "A",
                 "Allowed rotation angles in degrees. Leave empty for continuous rotation.",
                 GH_ParamAccess.list);
-            pManager.AddIntegerParameter("TimeSecs", "T",
+            pManager.AddNumberParameter("spacing", "Sp",
+                "Minimum gap between pieces in model units. 0 = no gap.",
+                GH_ParamAccess.item, 0.0);
+            pManager.AddIntegerParameter("time_limit", "T",
                 "Optimisation time budget in seconds.",
                 GH_ParamAccess.item, 30);
-            pManager.AddNumberParameter("Spacing", "Sp",
-                "Minimum gap between pieces in model units. 0 = no gap (default).",
-                GH_ParamAccess.item, 0.0);
-            pManager.AddBooleanParameter("Run", "R",
+            pManager.AddBooleanParameter("run", "R",
                 "Connect a Button or Toggle. Nesting fires on the rising edge.",
                 GH_ParamAccess.item, false);
 
@@ -99,16 +100,14 @@ namespace SparrowGH.Components
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
         {
-            pManager.AddCurveParameter("NestedCurves", "NC",
+            pManager.AddCurveParameter("nested_crvs", "NC",
                 "Input curves repositioned in their nested layout.", GH_ParamAccess.list);
-            pManager.AddTransformParameter("Transforms", "X",
+            pManager.AddIntegerParameter("ids", "ID",
+                "Original index of each curve in the input list.", GH_ParamAccess.list);
+            pManager.AddTransformParameter("transforms", "X",
                 "Transformation per curve (rotation + translation in XY).", GH_ParamAccess.list);
-            pManager.AddNumberParameter("StripWidth", "W",
-                "Optimised strip width.", GH_ParamAccess.item);
-            pManager.AddNumberParameter("Density", "D",
+            pManager.AddNumberParameter("density", "D",
                 "Packing density [0–1].", GH_ParamAccess.item);
-            pManager.AddTextParameter("Status", "S",
-                "Live progress log — connect to a Panel to watch the run.", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -121,30 +120,26 @@ namespace SparrowGH.Components
             double spacing = 0.0;
             bool run      = false;
 
-            if (!DA.GetDataList(0, curves)) return;
-            DA.GetData(1, ref stripH);
+            DA.GetData(0, ref stripH);
+            if (!DA.GetDataList(1, curves)) return;
             DA.GetDataList(2, angles);
-            DA.GetData(3, ref timeSecs);
-            DA.GetData(4, ref spacing);
+            DA.GetData(3, ref spacing);
+            DA.GetData(4, ref timeSecs);
             DA.GetData(5, ref run);
 
-            bool risingEdge = run && !_prevRun;
+            bool risingEdge = _initialized && run && !_prevRun;
             _prevRun = run;
+            _initialized = true;
 
-            // ── Launch background nesting on rising edge ──────────────────────────
+            // ── Launch on rising edge (only when not already running) ─────────────
             if (risingEdge && _state != State.Running)
             {
                 _state     = State.Running;
-                _progress  = "Starting…";
+                _progress  = "Starting";
                 _errorMsg  = "";
                 _startTime = DateTime.Now;
                 _timeBudget = timeSecs;
-                lock (_logLock)
-                {
-                    _log.Clear();
-                    string spacingNote = spacing > 0 ? $"  spacing {spacing}" : "";
-                    _log.Add($"[{Ts()}] Sparrow started — {curves.Count} curves  strip height {stripH}  budget {timeSecs}s{spacingNote}");
-                }
+                lock (_logLock) { _log.Clear(); }
 
                 var curvesCopy   = curves.Select(c => c.DuplicateCurve()).ToList();
                 var anglesCopy   = angles.ToList();
@@ -153,45 +148,45 @@ namespace SparrowGH.Components
                 double spacingCopy = spacing;
 
                 _bgTask = Task.Run(() => BackgroundNest(curvesCopy, stripCopy, anglesCopy, timeCopy, spacingCopy));
+
+                _ticker?.Dispose();
+                _ticker = new System.Threading.Timer(_ =>
+                {
+                    if (_state == State.Running)
+                        Rhino.RhinoApp.InvokeOnUiThread(new Action(() => ExpireSolution(true)));
+                    else
+                        { _ticker?.Dispose(); _ticker = null; }
+                }, null, 1000, 1000);
             }
 
-            // ── Short bubble message ──────────────────────────────────────────────
+            // ── Component message (shown below component name) ────────────────────
             switch (_state)
             {
-                case State.Running: AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Running"); break;
-                case State.Done:    AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "Done");    break;
-                case State.Failed:  AddRuntimeMessage(GH_RuntimeMessageLevel.Error,  "Failed");  break;
-                case State.Idle:    AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
-                                        _hasCached ? "Ready" : "Idle"); break;
+                case State.Running:
+                    Message = $"{_progress}\n[{ElapsedSecs()}/{_timeBudget}s]";
+                    break;
+                case State.Done:
+                    Message = $"density {_cachedDensity:P1}";
+                    break;
+                case State.Failed:
+                    Message = "error";
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Error, _errorMsg);
+                    break;
+                case State.Idle:
+                    Message = _hasCached ? $"density {_cachedDensity:P1}" : "";
+                    break;
             }
 
             // ── Geometry outputs ──────────────────────────────────────────────────
             OutputCached(DA);
 
-            // ── Status text output ────────────────────────────────────────────────
-            string statusText;
-            switch (_state)
-            {
-                case State.Running:
-                    statusText = BuildStatusText($"Phase: {_progress}");
-                    break;
-                case State.Done:
-                    statusText = BuildStatusText($"Completed — {_progress}");
-                    break;
-                case State.Failed:
-                    statusText = BuildStatusText($"ERROR: {_errorMsg}");
-                    break;
-                default:
-                    statusText = _hasCached
-                        ? BuildStatusText($"Cached — density {_cachedDensity:P1}  width {_cachedWidth:F2}")
-                        : "Press Run to start nesting.";
-                    break;
-            }
-            DA.SetData(4, statusText);
         }
 
         private string Ts() =>
             (DateTime.Now - _startTime).ToString(@"mm\:ss");
+
+        private int ElapsedSecs() =>
+            (int)(DateTime.Now - _startTime).TotalSeconds;
 
         private string AsciiBar()
         {
@@ -218,8 +213,8 @@ namespace SparrowGH.Components
             {
                 if (!_hasCached) return;
                 DA.SetDataList(0, _cachedCurves);
-                DA.SetDataList(1, _cachedTransforms);
-                DA.SetData(2, _cachedWidth);
+                DA.SetDataList(1, _cachedItemIds);
+                DA.SetDataList(2, _cachedTransforms);
                 DA.SetData(3, _cachedDensity);
             }
         }
@@ -269,13 +264,26 @@ namespace SparrowGH.Components
                     CreateNoWindow         = true,
                 };
 
-                using var proc = Process.Start(psi)!;
+                _proc = Process.Start(psi)!;
+                var proc = _proc;
 
-                // Sparrow logs to stdout — parse it for live progress updates
                 DateTime lastExpire = DateTime.MinValue;
+                var lastLines   = new System.Collections.Generic.Queue<string>();
+                var stderrLines = new System.Collections.Generic.Queue<string>();
+                string? earlyError = null;
+
                 proc.OutputDataReceived += (_, e) =>
                 {
                     if (e.Data == null) return;
+                    lock (lastLines) { lastLines.Enqueue(e.Data); if (lastLines.Count > 8) lastLines.Dequeue(); }
+                    // Surface item-too-large errors immediately
+                    if (e.Data.Contains("[MAIN] ERROR:"))
+                    {
+                        int idx = e.Data.IndexOf("[MAIN] ERROR:");
+                        earlyError = e.Data.Substring(idx + 7).Trim();
+                        Rhino.RhinoApp.InvokeOnUiThread(new Action(() => ExpireSolution(true)));
+                        return;
+                    }
                     var (shortStatus, logLine) = ParseProgress(e.Data);
                     if (shortStatus != null)
                     {
@@ -288,24 +296,36 @@ namespace SparrowGH.Components
                         }
                     }
                 };
+                proc.ErrorDataReceived += (_, e) =>
+                {
+                    if (e.Data == null) return;
+                    lock (stderrLines) { stderrLines.Enqueue(e.Data); if (stderrLines.Count > 5) stderrLines.Dequeue(); }
+                };
                 proc.BeginOutputReadLine();
-
-                // Drain stderr so the process doesn't block
                 proc.BeginErrorReadLine();
 
                 bool finished = proc.WaitForExit(timeSecs * 1000 + 15_000);
+                _proc = null;
                 if (!finished)
                 {
-                    proc.Kill();
+                    try { proc.Kill(); } catch { }
                     Fail($"Sparrow timed out after {timeSecs + 15}s.");
                     return;
                 }
+                if (earlyError != null) { Fail(earlyError); return; }
 
-                // Read output JSON
                 string outPath = Path.Combine(outputDir, "output", "final_gh_nest.json");
                 if (!File.Exists(outPath))
                 {
-                    Fail("Sparrow finished but no output file found.");
+                    var diag = new System.Text.StringBuilder();
+                    diag.Append($"No output file (exit {proc.ExitCode}).");
+                    string[] stderr = stderrLines.ToArray();
+                    string[] stdout = lastLines.ToArray();
+                    var tail = stderr.Length > 0 ? stderr : stdout;
+                    if (tail.Length > 0)
+                        diag.Append(" Last output: " + string.Join(" | ", tail
+                            .Select(l => l.Length > 120 ? l.Substring(l.Length - 120) : l)));
+                    Fail(diag.ToString());
                     return;
                 }
 
@@ -325,6 +345,38 @@ namespace SparrowGH.Components
                 Rhino.RhinoApp.InvokeOnUiThread(
                     new Action(() => ExpireSolution(true)));
             }
+        }
+
+        private void StopCurrentRun()
+        {
+            try { _proc?.Kill(); } catch { }
+            _proc = null;
+            _ticker?.Dispose();
+            _ticker = null;
+            if (_state == State.Running)
+            {
+                _state = State.Idle;
+                Message = "";
+            }
+        }
+
+        public override void AddedToDocument(GH_Document document)
+        {
+            base.AddedToDocument(document);
+            document.SolutionStart += OnSolutionStart;
+        }
+
+        public override void RemovedFromDocument(GH_Document document)
+        {
+            document.SolutionStart -= OnSolutionStart;
+            StopCurrentRun();
+            base.RemovedFromDocument(document);
+        }
+
+        private void OnSolutionStart(object sender, GH_SolutionEventArgs e)
+        {
+            if (this.Locked && _state == State.Running)
+                StopCurrentRun();
         }
 
         private void Fail(string msg)
@@ -350,12 +402,9 @@ namespace SparrowGH.Components
             var    wm      = _widthRx.Match(line);
             var    tm      = _timeRx.Match(line);
 
-            string density = dm.Success ? $"{double.Parse(dm.Groups[1].Value):F1}%" : "";
-            string width   = wm.Success ? $"width {double.Parse(wm.Groups[1].Value):F3}" : "";
             string ts      = tm.Success ? tm.Groups[1].Value : "??:??:??";
 
-            string detail  = string.Join("  ", new[] { width, density }.Where(s => s.Length > 0));
-            string shortStatus = detail.Length > 0 ? $"{phase} — {detail}" : phase;
+            string shortStatus = phase;
             string logLine     = $"[{ts}] {shortStatus}";
 
             return (shortStatus, logLine);
@@ -371,6 +420,7 @@ namespace SparrowGH.Components
 
             var nestedCurves = new List<Curve>();
             var transforms   = new List<Transform>();
+            var itemIds      = new List<int>();
 
             foreach (var placed in solution.layout.placed_items)
             {
@@ -388,6 +438,7 @@ namespace SparrowGH.Components
 
                 nestedCurves.Add(nested);
                 transforms.Add(combined);
+                itemIds.Add(itemId);
             }
 
             _progress = $"density {density:P1}  width {width:F3}";
@@ -401,6 +452,7 @@ namespace SparrowGH.Components
             {
                 _cachedCurves     = nestedCurves;
                 _cachedTransforms = transforms;
+                _cachedItemIds    = itemIds;
                 _cachedWidth      = width;
                 _cachedDensity    = density;
                 _hasCached        = true;
