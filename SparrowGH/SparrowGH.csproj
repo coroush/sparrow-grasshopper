@@ -10,19 +10,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Build against Rhino 7 DLLs so the plugin runs on both Rhino 7 and Rhino 8. -->
-    <Reference Include="RhinoCommon">
-      <HintPath>/Applications/Rhino 7.app/Contents/Frameworks/RhCore.framework/Versions/A/Resources/RhinoCommon.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Grasshopper">
-      <HintPath>/Applications/Rhino 7.app/Contents/Frameworks/RhCore.framework/Versions/A/Resources/ManagedPlugIns/GrasshopperPlugin.rhp/Grasshopper.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="GH_IO">
-      <HintPath>/Applications/Rhino 7.app/Contents/Frameworks/RhCore.framework/Versions/A/Resources/ManagedPlugIns/GrasshopperPlugin.rhp/GH_IO.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+    <!-- Build against NuGet SDK so the plugin runs on both Rhino 7 and Rhino 8 on all platforms. -->
+    <PackageReference Include="RhinoCommon" Version="7.38.24338.17001" ExcludeAssets="runtime" />
+    <PackageReference Include="Grasshopper" Version="7.38.24338.17001" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>
