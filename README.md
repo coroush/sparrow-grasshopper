@@ -11,8 +11,6 @@ This fork extends the original Sparrow engine with **bin packing** (nesting onto
 2. Extract and copy the three files into your Grasshopper Libraries folder
 3. Restart Rhino. A **Sparrow** tab will appear in Grasshopper with two components.
 
-No Rust or .NET SDK required — the compiled engine binary is included in each release.
-
 
 ## Components
 

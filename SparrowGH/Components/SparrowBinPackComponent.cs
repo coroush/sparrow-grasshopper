@@ -35,6 +35,8 @@ namespace SparrowGH.Components
         private List<double>?        _cachedDensities;
         private double               _cachedTotalDensity;
         private bool                 _hasCached;
+        private int                  _resultsVersion   = 0;
+        private int                  _deliveredVersion = -1;
 
         private bool  _prevRun;
         private bool  _initialized;
@@ -52,6 +54,27 @@ namespace SparrowGH.Components
         { }
 
         public override Guid ComponentGuid => new Guid("c3d4e5f6-a7b8-9012-cdef-234567890abc");
+
+        protected override void ExpireDownStreamObjects()
+        {
+            if (_resultsVersion != _deliveredVersion)
+                base.ExpireDownStreamObjects();
+        }
+
+        // TODO: fix icons
+        // protected override System.Drawing.Bitmap Icon => LoadIcon("SparrowGH.Resources.nest-bin.png");
+        //
+        // private static System.Drawing.Bitmap LoadIcon(string name)
+        // {
+        //     var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(name);
+        //     if (stream == null) return null!;
+        //     var original = new System.Drawing.Bitmap(stream);
+        //     var scaled = new System.Drawing.Bitmap(24, 24, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        //     using var g = System.Drawing.Graphics.FromImage(scaled);
+        //     g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+        //     g.DrawImage(original, 0, 0, 24, 24);
+        //     return scaled;
+        // }
 
         protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
@@ -133,7 +156,13 @@ namespace SparrowGH.Components
                 _ticker = new System.Threading.Timer(_ =>
                 {
                     if (_state == State.Running)
-                        Rhino.RhinoApp.InvokeOnUiThread(new Action(() => ExpireSolution(true)));
+                        Rhino.RhinoApp.InvokeOnUiThread(new Action(() =>
+                        {
+                            // Update message display only — no re-solve, no downstream trigger
+                            Message = $"{_progress}\n[{(int)(DateTime.Now - _startTime).TotalSeconds}/{_timeBudget}s]";
+
+                            Grasshopper.Instances.ActiveCanvas?.Refresh();
+                        }));
                     else
                         { _ticker?.Dispose(); _ticker = null; }
                 }, null, 1000, 1000);
@@ -168,6 +197,7 @@ namespace SparrowGH.Components
                 DA.SetDataTree(2, _cachedIdTree!);
                 DA.SetDataTree(3, _cachedXformTree!);
                 DA.SetDataList(4, _cachedDensities);
+                _deliveredVersion = _resultsVersion;
             }
         }
 
@@ -204,7 +234,7 @@ namespace SparrowGH.Components
 
                 var psi = new ProcessStartInfo(bin)
                 {
-                    Arguments              = $"--mode bp -i \"{inputPath}\" -t {timeSecs}{spacingArg}",
+                    Arguments              = $"--mode bp -i \"{inputPath}\" -t {timeSecs}{spacingArg} --sort-key exact-area",
                     WorkingDirectory       = outputDir,
                     RedirectStandardOutput = true,
                     RedirectStandardError  = true,
@@ -238,11 +268,7 @@ namespace SparrowGH.Components
                     if (status != null)
                     {
                         _progress = status;
-                        if ((DateTime.Now - lastRefresh).TotalSeconds >= 1)
-                        {
-                            lastRefresh = DateTime.Now;
-                            Rhino.RhinoApp.InvokeOnUiThread(new Action(() => ExpireSolution(true)));
-                        }
+                        // ticker handles the display update — no ExpireSolution here
                     }
                 };
                 proc.ErrorDataReceived += (_, e) =>
@@ -405,6 +431,7 @@ namespace SparrowGH.Components
                 _cachedDensities     = densities;
                 _cachedTotalDensity  = totalDens;
                 _hasCached           = true;
+                _resultsVersion++;
             }
         }
 

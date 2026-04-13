@@ -56,6 +56,8 @@ namespace SparrowGH.Components
         private double          _cachedWidth;
         private double          _cachedDensity;
         private bool            _hasCached;
+        private int             _resultsVersion   = 0;
+        private int             _deliveredVersion = -1;
 
         private bool _prevRun;
         private bool _initialized;
@@ -73,6 +75,27 @@ namespace SparrowGH.Components
         { }
 
         public override Guid ComponentGuid => new Guid("b2c3d4e5-f6a7-8901-bcde-f12345678901");
+
+        protected override void ExpireDownStreamObjects()
+        {
+            if (_resultsVersion != _deliveredVersion)
+                base.ExpireDownStreamObjects();
+        }
+
+        // TODO: fix icons
+        // protected override System.Drawing.Bitmap Icon => LoadIcon("SparrowGH.Resources.nest-roll.png");
+        //
+        // private static System.Drawing.Bitmap LoadIcon(string name)
+        // {
+        //     var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(name);
+        //     if (stream == null) return null!;
+        //     var original = new System.Drawing.Bitmap(stream);
+        //     var scaled = new System.Drawing.Bitmap(24, 24, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        //     using var g = System.Drawing.Graphics.FromImage(scaled);
+        //     g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+        //     g.DrawImage(original, 0, 0, 24, 24);
+        //     return scaled;
+        // }
 
         protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
@@ -153,7 +176,13 @@ namespace SparrowGH.Components
                 _ticker = new System.Threading.Timer(_ =>
                 {
                     if (_state == State.Running)
-                        Rhino.RhinoApp.InvokeOnUiThread(new Action(() => ExpireSolution(true)));
+                        Rhino.RhinoApp.InvokeOnUiThread(new Action(() =>
+                        {
+                            // Update message display only — no re-solve, no downstream trigger
+                            Message = $"{_progress}\n[{(int)(DateTime.Now - _startTime).TotalSeconds}/{_timeBudget}s]";
+
+                            Grasshopper.Instances.ActiveCanvas?.Refresh();
+                        }));
                     else
                         { _ticker?.Dispose(); _ticker = null; }
                 }, null, 1000, 1000);
@@ -216,6 +245,7 @@ namespace SparrowGH.Components
                 DA.SetDataList(1, _cachedItemIds);
                 DA.SetDataList(2, _cachedTransforms);
                 DA.SetData(3, _cachedDensity);
+                _deliveredVersion = _resultsVersion;
             }
         }
 
@@ -289,11 +319,7 @@ namespace SparrowGH.Components
                     {
                         _progress = shortStatus;
                         lock (_logLock) { _log.Add(logLine!); }
-                        if ((DateTime.Now - lastExpire).TotalSeconds >= 1)
-                        {
-                            lastExpire = DateTime.Now;
-                            Rhino.RhinoApp.InvokeOnUiThread(new Action(() => ExpireSolution(true)));
-                        }
+                        // ticker handles the display update — no ExpireSolution here
                     }
                 };
                 proc.ErrorDataReceived += (_, e) =>
@@ -456,6 +482,7 @@ namespace SparrowGH.Components
                 _cachedWidth      = width;
                 _cachedDensity    = density;
                 _hasCached        = true;
+                _resultsVersion++;
             }
         }
 

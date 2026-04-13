@@ -29,5 +29,11 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <!-- Required for 'dynamic' keyword on net48 with dotnet SDK -->
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
+    <!-- Required for canvas Invalidate() calls -->
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\*.png" />
   </ItemGroup>
 </Project>
