@@ -234,7 +234,7 @@ namespace SparrowGH.Components
 
                 var psi = new ProcessStartInfo(bin)
                 {
-                    Arguments              = $"--mode bp -i \"{inputPath}\" -t {timeSecs}{spacingArg} --sort-key exact-area",
+                    Arguments              = $"--mode bp -i \"{inputPath}\" -t {timeSecs}{spacingArg} --sort-key exact-area --no-svg",
                     WorkingDirectory       = outputDir,
                     RedirectStandardOutput = true,
                     RedirectStandardError  = true,
@@ -279,9 +279,11 @@ namespace SparrowGH.Components
                 proc.BeginOutputReadLine();
                 proc.BeginErrorReadLine();
 
-                bool finished = proc.WaitForExit(timeSecs * 1000 + 15_000);
+                // 120s overhead: large files need ~30s startup (NFP build) + time to write output JSON
+                const int overheadMs = 120_000;
+                bool finished = proc.WaitForExit(timeSecs * 1000 + overheadMs);
                 _proc = null;
-                if (!finished) { try { proc.Kill(); } catch { } Fail($"Timed out after {timeSecs + 15}s."); return; }
+                if (!finished) { try { proc.Kill(); } catch { } Fail($"Timed out after {timeSecs + overheadMs / 1000}s."); return; }
 
                 if (earlyError != null) { Fail(earlyError); return; }
 
