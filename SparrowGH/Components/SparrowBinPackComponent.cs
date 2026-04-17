@@ -92,6 +92,9 @@ namespace SparrowGH.Components
                 GH_ParamAccess.item, 0.0);
             pManager.AddIntegerParameter("time_limit", "T",
                 "Optimisation time budget in seconds.", GH_ParamAccess.item, 60);
+            pManager.AddIntegerParameter("seed", "S",
+                "RNG seed. 0 = random each run; any positive value makes runs reproducible.",
+                GH_ParamAccess.item, 0);
             pManager.AddBooleanParameter("run", "R",
                 "Connect a Button or Toggle. Fires on rising edge.",
                 GH_ParamAccess.item, false);
@@ -122,6 +125,7 @@ namespace SparrowGH.Components
             var angles     = new List<double>();
             int timeSecs   = 60;
             double spacing = 0.0;
+            int seed       = 0;
             bool run       = false;
 
             DA.GetData(0, ref sheetW);
@@ -130,7 +134,8 @@ namespace SparrowGH.Components
             DA.GetDataList(3, angles);
             DA.GetData(4, ref spacing);
             DA.GetData(5, ref timeSecs);
-            DA.GetData(6, ref run);
+            DA.GetData(6, ref seed);
+            DA.GetData(7, ref run);
 
             // Seed _prevRun on first solve so a saved-true toggle doesn't fire immediately
             bool risingEdge = _initialized && run && !_prevRun;
@@ -149,8 +154,9 @@ namespace SparrowGH.Components
                 var curvesCopy = curves.Select(c => c.DuplicateCurve()).ToList();
                 var anglesCopy = angles.ToList();
 
+                int seedCopy = seed;
                 _bgTask = Task.Run(() =>
-                    BackgroundBinPack(curvesCopy, sheetW, sheetH, anglesCopy, timeSecs, spacing));
+                    BackgroundBinPack(curvesCopy, sheetW, sheetH, anglesCopy, timeSecs, spacing, seedCopy));
 
                 _ticker?.Dispose();
                 _ticker = new System.Threading.Timer(_ =>
@@ -206,7 +212,7 @@ namespace SparrowGH.Components
 
         private void BackgroundBinPack(
             List<Curve> curves, double sheetWidth, double sheetHeight,
-            List<double> angles, int timeSecs, double spacing)
+            List<double> angles, int timeSecs, double spacing, int seed)
         {
             string tempDir   = Path.GetTempPath();
             string jobName   = "gh_binpack_" + DateTime.Now.Ticks;
@@ -231,10 +237,11 @@ namespace SparrowGH.Components
                 string spacingArg = spacing > 0
                     ? $" -p {spacing.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
                     : "";
+                string seedArg = seed > 0 ? $" -s {seed}" : "";
 
                 var psi = new ProcessStartInfo(bin)
                 {
-                    Arguments              = $"--mode bp -i \"{inputPath}\" -t {timeSecs}{spacingArg} --sort-key exact-area --no-svg",
+                    Arguments              = $"--mode bp -i \"{inputPath}\" -t {timeSecs}{spacingArg}{seedArg} --sort-key exact-area --no-svg",
                     WorkingDirectory       = outputDir,
                     RedirectStandardOutput = true,
                     RedirectStandardError  = true,
