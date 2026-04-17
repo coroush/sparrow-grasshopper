@@ -42,7 +42,9 @@ namespace SparrowGH.Components
         private bool  _initialized;
         private Task? _bgTask;
         private System.Threading.Timer? _ticker;
-        private volatile Process? _proc;
+        private readonly object _procsLock = new object();
+        private List<Process> _procs = new List<Process>();
+        private int _cachedBestSeed;
 
         public SparrowBinPackComponent()
             : base(
@@ -92,9 +94,9 @@ namespace SparrowGH.Components
                 GH_ParamAccess.item, 0.0);
             pManager.AddIntegerParameter("time_limit", "T",
                 "Optimisation time budget in seconds.", GH_ParamAccess.item, 60);
-            pManager.AddIntegerParameter("seed", "S",
-                "RNG seed. 0 = random each run; any positive value makes runs reproducible.",
-                GH_ParamAccess.item, 0);
+            pManager.AddIntegerParameter("seeds", "S",
+                "RNG seed(s). 0 = random. Feed a flat list of multiple seeds to run them in parallel; the best result is returned and the winning seed is shown.",
+                GH_ParamAccess.list);
             pManager.AddBooleanParameter("run", "R",
                 "Connect a Button or Toggle. Fires on rising edge.",
                 GH_ParamAccess.item, false);
@@ -125,7 +127,7 @@ namespace SparrowGH.Components
             var angles     = new List<double>();
             int timeSecs   = 60;
             double spacing = 0.0;
-            int seed       = 0;
+            var seeds      = new List<int>();
             bool run       = false;
 
             DA.GetData(0, ref sheetW);
@@ -134,8 +136,9 @@ namespace SparrowGH.Components
             DA.GetDataList(3, angles);
             DA.GetData(4, ref spacing);
             DA.GetData(5, ref timeSecs);
-            DA.GetData(6, ref seed);
+            DA.GetDataList(6, seeds);
             DA.GetData(7, ref run);
+            if (seeds.Count == 0) seeds.Add(0);
 
             // Seed _prevRun on first solve so a saved-true toggle doesn't fire immediately
             bool risingEdge = _initialized && run && !_prevRun;
@@ -153,10 +156,10 @@ namespace SparrowGH.Components
 
                 var curvesCopy = curves.Select(c => c.DuplicateCurve()).ToList();
                 var anglesCopy = angles.ToList();
+                var seedsCopy  = seeds.ToList();
 
-                int seedCopy = seed;
                 _bgTask = Task.Run(() =>
-                    BackgroundBinPack(curvesCopy, sheetW, sheetH, anglesCopy, timeSecs, spacing, seedCopy));
+                    BackgroundBinPack(curvesCopy, sheetW, sheetH, anglesCopy, timeSecs, spacing, seedsCopy));
 
                 _ticker?.Dispose();
                 _ticker = new System.Threading.Timer(_ =>
@@ -181,16 +184,18 @@ namespace SparrowGH.Components
                     Message = $"{_progress}\n[{(int)(DateTime.Now - _startTime).TotalSeconds}/{_timeBudget}s]";
                     break;
                 case State.Done:
-                    Message = $"{_cachedSheetsUsed} sheets · {_cachedTotalDensity:P1}";
+                    Message = FormatResultMessage();
+                    if (_cachedBestSeed > 0)
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, $"Best seed: {_cachedBestSeed}");
                     break;
                 case State.Failed:
                     Message = "error";
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Error, _errorMsg);
                     break;
                 case State.Idle:
-                    Message = _hasCached
-                        ? $"{_cachedSheetsUsed} sheets · {_cachedTotalDensity:P1}"
-                        : "";
+                    Message = _hasCached ? FormatResultMessage() : "";
+                    if (_hasCached && _cachedBestSeed > 0)
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, $"Best seed: {_cachedBestSeed}");
                     break;
             }
 
@@ -212,19 +217,18 @@ namespace SparrowGH.Components
 
         private void BackgroundBinPack(
             List<Curve> curves, double sheetWidth, double sheetHeight,
-            List<double> angles, int timeSecs, double spacing, int seed)
+            List<double> angles, int timeSecs, double spacing, List<int> seeds)
         {
             string tempDir   = Path.GetTempPath();
-            string jobName   = "gh_binpack_" + DateTime.Now.Ticks;
+            string ticks     = DateTime.Now.Ticks.ToString();
+            string jobName   = "gh_binpack_" + ticks;
             string inputPath = Path.Combine(tempDir, jobName + ".json");
-            string outputDir = Path.Combine(tempDir, jobName + "_output");
 
             try
             {
                 var input = BuildBinPackInput(curves, sheetWidth, sheetHeight, angles);
                 if (input == null) { Fail("No valid curves found."); return; }
 
-                Directory.CreateDirectory(outputDir);
                 File.WriteAllText(inputPath, JsonConvert.SerializeObject(input, Formatting.Indented));
 
                 string? bin = FindSparrowBinary();
@@ -237,85 +241,160 @@ namespace SparrowGH.Components
                 string spacingArg = spacing > 0
                     ? $" -p {spacing.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
                     : "";
-                string seedArg = seed > 0 ? $" -s {seed}" : "";
 
-                var psi = new ProcessStartInfo(bin)
+                // ── Launch one process per seed ───────────────────────────────────
+                var runs = new List<(int seed, Process proc, string outputDir,
+                                      Queue<string> stdout, Queue<string> stderr,
+                                      System.Collections.Concurrent.ConcurrentDictionary<int,string> earlyError)>();
+
+                int totalRuns = seeds.Count;
+                int doneCount = 0;
+
+                for (int i = 0; i < seeds.Count; i++)
                 {
-                    Arguments              = $"--mode bp -i \"{inputPath}\" -t {timeSecs}{spacingArg}{seedArg} --sort-key exact-area --no-svg",
-                    WorkingDirectory       = outputDir,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                    UseShellExecute        = false,
-                    CreateNoWindow         = true,
-                };
+                    int seed = seeds[i];
+                    string jobSuffix = seed > 0 ? $"s{seed}" : $"r{i}";
+                    string outputDir = Path.Combine(tempDir, $"{jobName}_{jobSuffix}_output");
+                    Directory.CreateDirectory(outputDir);
 
-                _proc = Process.Start(psi)!;
-                var proc = _proc;
-
-                DateTime lastRefresh = DateTime.MinValue;
-                string? earlyError = null;
-                // Rolling buffer of last stdout lines for diagnostics
-                var lastLines = new System.Collections.Generic.Queue<string>();
-                var stderrLines = new System.Collections.Generic.Queue<string>();
-
-                proc.OutputDataReceived += (_, e) =>
-                {
-                    if (e.Data == null) return;
-                    lock (lastLines) { lastLines.Enqueue(e.Data); if (lastLines.Count > 8) lastLines.Dequeue(); }
-
-                    if (e.Data.Contains("[BP] ERROR:"))
+                    string seedArg = seed > 0 ? $" -s {seed}" : "";
+                    var psi = new ProcessStartInfo(bin)
                     {
-                        int idx = e.Data.IndexOf("[BP] ERROR:");
-                        earlyError = e.Data.Substring(idx + 5).Trim();
-                        Rhino.RhinoApp.InvokeOnUiThread(new Action(() => ExpireSolution(true)));
-                        return;
-                    }
+                        Arguments              = $"--mode bp -i \"{inputPath}\" -t {timeSecs}{spacingArg}{seedArg} --sort-key exact-area --no-svg",
+                        WorkingDirectory       = outputDir,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError  = true,
+                        UseShellExecute        = false,
+                        CreateNoWindow         = true,
+                    };
 
-                    string? status = ParseBpProgress(e.Data);
-                    if (status != null)
+                    var proc      = Process.Start(psi)!;
+                    var stdoutBuf = new Queue<string>();
+                    var stderrBuf = new Queue<string>();
+                    var earlyErr  = new System.Collections.Concurrent.ConcurrentDictionary<int,string>();
+                    int capturedSeed = seed;
+
+                    proc.OutputDataReceived += (_, e) =>
                     {
-                        _progress = status;
-                        // ticker handles the display update — no ExpireSolution here
-                    }
-                };
-                proc.ErrorDataReceived += (_, e) =>
-                {
-                    if (e.Data == null) return;
-                    lock (stderrLines) { stderrLines.Enqueue(e.Data); if (stderrLines.Count > 5) stderrLines.Dequeue(); }
-                };
-                proc.BeginOutputReadLine();
-                proc.BeginErrorReadLine();
+                        if (e.Data == null) return;
+                        lock (stdoutBuf) { stdoutBuf.Enqueue(e.Data); if (stdoutBuf.Count > 8) stdoutBuf.Dequeue(); }
 
+                        if (e.Data.Contains("[BP] ERROR:"))
+                        {
+                            int idx = e.Data.IndexOf("[BP] ERROR:");
+                            earlyErr[0] = e.Data.Substring(idx + 5).Trim();
+                            return;
+                        }
+
+                        if (e.Data.Contains("[BP]") && e.Data.Contains("final solution"))
+                        {
+                            int d = System.Threading.Interlocked.Increment(ref doneCount);
+                            _progress = totalRuns > 1 ? $"{d}/{totalRuns} seeds done" : "Finalising";
+                            return;
+                        }
+
+                        string? status = ParseBpProgress(e.Data);
+                        if (status != null)
+                        {
+                            _progress = totalRuns > 1
+                                ? $"seed {(capturedSeed == 0 ? "rand" : capturedSeed.ToString())}: {status}  [{doneCount}/{totalRuns}]"
+                                : status;
+                        }
+                    };
+                    proc.ErrorDataReceived += (_, e) =>
+                    {
+                        if (e.Data == null) return;
+                        lock (stderrBuf) { stderrBuf.Enqueue(e.Data); if (stderrBuf.Count > 5) stderrBuf.Dequeue(); }
+                    };
+                    proc.BeginOutputReadLine();
+                    proc.BeginErrorReadLine();
+
+                    runs.Add((seed, proc, outputDir, stdoutBuf, stderrBuf, earlyErr));
+                }
+
+                lock (_procsLock) { _procs.Clear(); _procs.AddRange(runs.Select(r => r.proc)); }
+
+                // ── Wait on all processes within the shared wall-clock budget ────
                 // 120s overhead: large files need ~30s startup (NFP build) + time to write output JSON
                 const int overheadMs = 120_000;
-                bool finished = proc.WaitForExit(timeSecs * 1000 + overheadMs);
-                _proc = null;
-                if (!finished) { try { proc.Kill(); } catch { } Fail($"Timed out after {timeSecs + overheadMs / 1000}s."); return; }
+                var deadline = DateTime.Now.AddMilliseconds(timeSecs * 1000 + overheadMs);
 
-                if (earlyError != null) { Fail(earlyError); return; }
-
-                string outPath = Path.Combine(outputDir, "output", "final_gh_binpack.json");
-                if (!File.Exists(outPath))
+                foreach (var r in runs)
                 {
-                    // Collect diagnostics: exit code + last log lines
-                    var diag = new System.Text.StringBuilder();
-                    diag.Append($"No output file (exit {proc.ExitCode}).");
-                    string[] stderr = stderrLines.ToArray();
-                    string[] stdout = lastLines.ToArray();
-                    var tail = stderr.Length > 0 ? stderr : stdout;
-                    if (tail.Length > 0)
-                        diag.Append(" Last output: " + string.Join(" | ", tail
-                            .Select(l => l.Length > 120 ? l.Substring(l.Length - 120) : l)));
-                    Fail(diag.ToString());
+                    int remainingMs = (int)Math.Max(0, (deadline - DateTime.Now).TotalMilliseconds);
+                    if (!r.proc.WaitForExit(remainingMs))
+                    {
+                        try { r.proc.Kill(); } catch { }
+                    }
+                }
+
+                // ── Score each run and pick the winner ──────────────────────────
+                var results  = new List<(int seed, int sheets, double lastDensity, double totalDensity, string json)>();
+                var failures = new List<(int seed, string reason)>();
+
+                foreach (var r in runs)
+                {
+                    if (r.earlyError.TryGetValue(0, out string? err))
+                    {
+                        failures.Add((r.seed, err));
+                        continue;
+                    }
+                    string outPath = Path.Combine(r.outputDir, "output", "final_gh_binpack.json");
+                    if (!File.Exists(outPath))
+                    {
+                        string[] stderrArr = r.stderr.ToArray();
+                        string[] stdoutArr = r.stdout.ToArray();
+                        var tail = stderrArr.Length > 0 ? stderrArr : stdoutArr;
+                        string tailMsg = tail.Length > 0
+                            ? " Last output: " + string.Join(" | ", tail.Select(l => l.Length > 120 ? l.Substring(l.Length - 120) : l))
+                            : "";
+                        failures.Add((r.seed, $"No output (exit {r.proc.ExitCode}).{tailMsg}"));
+                        continue;
+                    }
+                    try
+                    {
+                        string json = File.ReadAllText(outPath);
+                        dynamic result   = JsonConvert.DeserializeObject(json)!;
+                        dynamic solution = result.solution;
+                        double totalDens = (double)solution.density;
+                        int sheets       = 0;
+                        double lastDens  = 1.0;
+                        foreach (var layout in solution.layouts)
+                        {
+                            sheets++;
+                            lastDens = (double)layout.density;
+                        }
+                        results.Add((r.seed, sheets, lastDens, totalDens, json));
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add((r.seed, $"parse error: {ex.Message}"));
+                    }
+                }
+
+                if (results.Count == 0)
+                {
+                    string combined = failures.Count > 0
+                        ? string.Join(" | ", failures.Select(f => $"seed {(f.seed == 0 ? "rand" : f.seed.ToString())}: {f.reason}"))
+                        : "all runs failed";
+                    Fail(combined);
                     return;
                 }
 
-                ParseBpAndCache(File.ReadAllText(outPath), curves, sheetWidth, sheetHeight);
+                // Winner: fewest sheets, tie-break by smallest last-sheet density (least area in last sheet)
+                var best = results
+                    .OrderBy(x => x.sheets)
+                    .ThenBy(x => x.lastDensity)
+                    .First();
+
+                ParseBpAndCache(best.json, curves, sheetWidth, sheetHeight);
+                _cachedBestSeed = best.seed;
                 _state = State.Done;
             }
             catch (Exception ex) { Fail(ex.Message); }
             finally
             {
+                lock (_procsLock) _procs.Clear();
                 try { File.Delete(inputPath); } catch { }
                 Rhino.RhinoApp.InvokeOnUiThread(new Action(() => ExpireSolution(true)));
             }
@@ -323,11 +402,19 @@ namespace SparrowGH.Components
 
         private void StopCurrentRun()
         {
-            try { _proc?.Kill(); } catch { }
-            _proc = null;
+            lock (_procsLock)
+            {
+                foreach (var p in _procs) { try { p.Kill(); } catch { } }
+                _procs.Clear();
+            }
             _ticker?.Dispose();
             _ticker = null;
             if (_state == State.Running) { _state = State.Idle; Message = ""; }
+        }
+
+        private string FormatResultMessage()
+        {
+            return $"{_cachedSheetsUsed} sheets · {_cachedTotalDensity:P1}";
         }
 
         public override void AddedToDocument(GH_Document document)

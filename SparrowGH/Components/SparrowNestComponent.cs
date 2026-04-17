@@ -63,7 +63,9 @@ namespace SparrowGH.Components
         private bool _initialized;
         private Task? _bgTask;
         private System.Threading.Timer? _ticker;
-        private volatile Process? _proc;
+        private readonly object _procsLock = new object();
+        private List<Process> _procs = new List<Process>();
+        private int _cachedBestSeed;
 
         public SparrowNestComponent()
             : base(
@@ -114,6 +116,9 @@ namespace SparrowGH.Components
             pManager.AddIntegerParameter("time_limit", "T",
                 "Optimisation time budget in seconds.",
                 GH_ParamAccess.item, 30);
+            pManager.AddIntegerParameter("seeds", "S",
+                "RNG seed(s). 0 = random. Feed a flat list of multiple seeds to run them in parallel; the best result is returned and the winning seed is shown.",
+                GH_ParamAccess.list);
             pManager.AddBooleanParameter("run", "R",
                 "Connect a Button or Toggle. Nesting fires on the rising edge.",
                 GH_ParamAccess.item, false);
@@ -141,6 +146,7 @@ namespace SparrowGH.Components
             var angles    = new List<double>();
             int timeSecs  = 30;
             double spacing = 0.0;
+            var seeds     = new List<int>();
             bool run      = false;
 
             DA.GetData(0, ref stripH);
@@ -148,7 +154,9 @@ namespace SparrowGH.Components
             DA.GetDataList(2, angles);
             DA.GetData(3, ref spacing);
             DA.GetData(4, ref timeSecs);
-            DA.GetData(5, ref run);
+            DA.GetDataList(5, seeds);
+            DA.GetData(6, ref run);
+            if (seeds.Count == 0) seeds.Add(0);
 
             bool risingEdge = _initialized && run && !_prevRun;
             _prevRun = run;
@@ -166,11 +174,12 @@ namespace SparrowGH.Components
 
                 var curvesCopy   = curves.Select(c => c.DuplicateCurve()).ToList();
                 var anglesCopy   = angles.ToList();
+                var seedsCopy    = seeds.ToList();
                 double stripCopy = stripH;
                 int timeCopy     = timeSecs;
                 double spacingCopy = spacing;
 
-                _bgTask = Task.Run(() => BackgroundNest(curvesCopy, stripCopy, anglesCopy, timeCopy, spacingCopy));
+                _bgTask = Task.Run(() => BackgroundNest(curvesCopy, stripCopy, anglesCopy, timeCopy, spacingCopy, seedsCopy));
 
                 _ticker?.Dispose();
                 _ticker = new System.Threading.Timer(_ =>
@@ -195,14 +204,18 @@ namespace SparrowGH.Components
                     Message = $"{_progress}\n[{ElapsedSecs()}/{_timeBudget}s]";
                     break;
                 case State.Done:
-                    Message = $"density {_cachedDensity:P1}";
+                    Message = FormatResultMessage();
+                    if (_cachedBestSeed > 0)
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, $"Best seed: {_cachedBestSeed}");
                     break;
                 case State.Failed:
                     Message = "error";
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Error, _errorMsg);
                     break;
                 case State.Idle:
-                    Message = _hasCached ? $"density {_cachedDensity:P1}" : "";
+                    Message = _hasCached ? FormatResultMessage() : "";
+                    if (_hasCached && _cachedBestSeed > 0)
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, $"Best seed: {_cachedBestSeed}");
                     break;
             }
 
@@ -253,12 +266,12 @@ namespace SparrowGH.Components
 
         private void BackgroundNest(
             List<Curve> curves, double stripHeight,
-            List<double> angles, int timeSecs, double spacing)
+            List<double> angles, int timeSecs, double spacing, List<int> seeds)
         {
             string tempDir   = Path.GetTempPath();
-            string jobName   = "gh_nest_" + DateTime.Now.Ticks;
+            string ticks     = DateTime.Now.Ticks.ToString();
+            string jobName   = "gh_nest_" + ticks;
             string inputPath = Path.Combine(tempDir, jobName + ".json");
-            string outputDir = Path.Combine(tempDir, jobName + "_output");
 
             try
             {
@@ -269,7 +282,6 @@ namespace SparrowGH.Components
                     return;
                 }
 
-                Directory.CreateDirectory(outputDir);
                 File.WriteAllText(inputPath, JsonConvert.SerializeObject(input, Formatting.Indented));
 
                 string? bin = FindSparrowBinary();
@@ -279,87 +291,145 @@ namespace SparrowGH.Components
                     return;
                 }
 
-                // Build CLI args — add -p spacing when non-zero
                 string spacingArg = spacing > 0
                     ? $" -p {spacing.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
                     : "";
 
-                var psi = new ProcessStartInfo(bin)
+                // ── Launch one process per seed ───────────────────────────────────
+                var runs = new List<(int seed, Process proc, string outputDir,
+                                      Queue<string> stdout, Queue<string> stderr,
+                                      System.Collections.Concurrent.ConcurrentDictionary<int,string> earlyError)>();
+
+                int totalRuns = seeds.Count;
+                int doneCount = 0;
+
+                for (int i = 0; i < seeds.Count; i++)
                 {
-                    Arguments              = $"-i \"{inputPath}\" -t {timeSecs}{spacingArg} --no-svg",
-                    WorkingDirectory       = outputDir,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                    UseShellExecute        = false,
-                    CreateNoWindow         = true,
-                };
+                    int seed = seeds[i];
+                    string jobSuffix = seed > 0 ? $"s{seed}" : $"r{i}";
+                    string outputDir = Path.Combine(tempDir, $"{jobName}_{jobSuffix}_output");
+                    Directory.CreateDirectory(outputDir);
 
-                _proc = Process.Start(psi)!;
-                var proc = _proc;
-
-                DateTime lastExpire = DateTime.MinValue;
-                var lastLines   = new System.Collections.Generic.Queue<string>();
-                var stderrLines = new System.Collections.Generic.Queue<string>();
-                string? earlyError = null;
-
-                proc.OutputDataReceived += (_, e) =>
-                {
-                    if (e.Data == null) return;
-                    lock (lastLines) { lastLines.Enqueue(e.Data); if (lastLines.Count > 8) lastLines.Dequeue(); }
-                    // Surface item-too-large errors immediately
-                    if (e.Data.Contains("[MAIN] ERROR:"))
+                    string seedArg = seed > 0 ? $" -s {seed}" : "";
+                    var psi = new ProcessStartInfo(bin)
                     {
-                        int idx = e.Data.IndexOf("[MAIN] ERROR:");
-                        earlyError = e.Data.Substring(idx + 7).Trim();
-                        Rhino.RhinoApp.InvokeOnUiThread(new Action(() => ExpireSolution(true)));
-                        return;
-                    }
-                    var (shortStatus, logLine) = ParseProgress(e.Data);
-                    if (shortStatus != null)
-                    {
-                        _progress = shortStatus;
-                        lock (_logLock) { _log.Add(logLine!); }
-                        // ticker handles the display update — no ExpireSolution here
-                    }
-                };
-                proc.ErrorDataReceived += (_, e) =>
-                {
-                    if (e.Data == null) return;
-                    lock (stderrLines) { stderrLines.Enqueue(e.Data); if (stderrLines.Count > 5) stderrLines.Dequeue(); }
-                };
-                proc.BeginOutputReadLine();
-                proc.BeginErrorReadLine();
+                        Arguments              = $"-i \"{inputPath}\" -t {timeSecs}{spacingArg}{seedArg} --no-svg",
+                        WorkingDirectory       = outputDir,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError  = true,
+                        UseShellExecute        = false,
+                        CreateNoWindow         = true,
+                    };
 
-                // 120s overhead: large files need ~30s startup (NFP build) + time to write output JSON
+                    var proc      = Process.Start(psi)!;
+                    var stdoutBuf = new Queue<string>();
+                    var stderrBuf = new Queue<string>();
+                    var earlyErr  = new System.Collections.Concurrent.ConcurrentDictionary<int,string>();
+                    int capturedSeed = seed;
+
+                    proc.OutputDataReceived += (_, e) =>
+                    {
+                        if (e.Data == null) return;
+                        lock (stdoutBuf) { stdoutBuf.Enqueue(e.Data); if (stdoutBuf.Count > 8) stdoutBuf.Dequeue(); }
+
+                        if (e.Data.Contains("[MAIN] ERROR:"))
+                        {
+                            int idx = e.Data.IndexOf("[MAIN] ERROR:");
+                            earlyErr[0] = e.Data.Substring(idx + 7).Trim();
+                            return;
+                        }
+
+                        var (shortStatus, logLine) = ParseProgress(e.Data);
+                        if (shortStatus != null)
+                        {
+                            _progress = totalRuns > 1
+                                ? $"seed {(capturedSeed == 0 ? "rand" : capturedSeed.ToString())}: {shortStatus}  [{doneCount}/{totalRuns}]"
+                                : shortStatus;
+                            lock (_logLock) { _log.Add(logLine!); }
+                        }
+                    };
+                    proc.ErrorDataReceived += (_, e) =>
+                    {
+                        if (e.Data == null) return;
+                        lock (stderrBuf) { stderrBuf.Enqueue(e.Data); if (stderrBuf.Count > 5) stderrBuf.Dequeue(); }
+                    };
+                    proc.BeginOutputReadLine();
+                    proc.BeginErrorReadLine();
+
+                    runs.Add((seed, proc, outputDir, stdoutBuf, stderrBuf, earlyErr));
+                }
+
+                lock (_procsLock) { _procs.Clear(); _procs.AddRange(runs.Select(r => r.proc)); }
+
+                // ── Wait on all processes within the shared wall-clock budget ────
                 const int overheadMs = 120_000;
-                bool finished = proc.WaitForExit(timeSecs * 1000 + overheadMs);
-                _proc = null;
-                if (!finished)
-                {
-                    try { proc.Kill(); } catch { }
-                    Fail($"Sparrow timed out after {timeSecs + overheadMs / 1000}s.");
-                    return;
-                }
-                if (earlyError != null) { Fail(earlyError); return; }
+                var deadline = DateTime.Now.AddMilliseconds(timeSecs * 1000 + overheadMs);
 
-                string outPath = Path.Combine(outputDir, "output", "final_gh_nest.json");
-                if (!File.Exists(outPath))
+                foreach (var r in runs)
                 {
-                    var diag = new System.Text.StringBuilder();
-                    diag.Append($"No output file (exit {proc.ExitCode}).");
-                    string[] stderr = stderrLines.ToArray();
-                    string[] stdout = lastLines.ToArray();
-                    var tail = stderr.Length > 0 ? stderr : stdout;
-                    if (tail.Length > 0)
-                        diag.Append(" Last output: " + string.Join(" | ", tail
-                            .Select(l => l.Length > 120 ? l.Substring(l.Length - 120) : l)));
-                    Fail(diag.ToString());
-                    return;
+                    int remainingMs = (int)Math.Max(0, (deadline - DateTime.Now).TotalMilliseconds);
+                    if (!r.proc.WaitForExit(remainingMs))
+                    {
+                        try { r.proc.Kill(); } catch { }
+                    }
+                    System.Threading.Interlocked.Increment(ref doneCount);
                 }
 
-                string json = File.ReadAllText(outPath);
-                ParseAndCache(json, curves);
+                // ── Score each run and pick the winner ──────────────────────────
+                var results  = new List<(int seed, double width, double density, string json)>();
+                var failures = new List<(int seed, string reason)>();
 
+                foreach (var r in runs)
+                {
+                    if (r.earlyError.TryGetValue(0, out string? err))
+                    {
+                        failures.Add((r.seed, err));
+                        continue;
+                    }
+                    string outPath = Path.Combine(r.outputDir, "output", "final_gh_nest.json");
+                    if (!File.Exists(outPath))
+                    {
+                        string[] stderrArr = r.stderr.ToArray();
+                        string[] stdoutArr = r.stdout.ToArray();
+                        var tail = stderrArr.Length > 0 ? stderrArr : stdoutArr;
+                        string tailMsg = tail.Length > 0
+                            ? " Last output: " + string.Join(" | ", tail.Select(l => l.Length > 120 ? l.Substring(l.Length - 120) : l))
+                            : "";
+                        failures.Add((r.seed, $"No output (exit {r.proc.ExitCode}).{tailMsg}"));
+                        continue;
+                    }
+                    try
+                    {
+                        string json     = File.ReadAllText(outPath);
+                        dynamic result  = JsonConvert.DeserializeObject(json)!;
+                        var solution    = result.solution;
+                        double width    = (double)solution.strip_width;
+                        double density  = (double)solution.density;
+                        results.Add((r.seed, width, density, json));
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add((r.seed, $"parse error: {ex.Message}"));
+                    }
+                }
+
+                if (results.Count == 0)
+                {
+                    string combined = failures.Count > 0
+                        ? string.Join(" | ", failures.Select(f => $"seed {(f.seed == 0 ? "rand" : f.seed.ToString())}: {f.reason}"))
+                        : "all runs failed";
+                    Fail(combined);
+                    return;
+                }
+
+                // Winner: smallest strip width (tie-break by higher density, rarely differs since width drives density)
+                var best = results
+                    .OrderBy(x => x.width)
+                    .ThenByDescending(x => x.density)
+                    .First();
+
+                ParseAndCache(best.json, curves);
+                _cachedBestSeed = best.seed;
                 _state = State.Done;
             }
             catch (Exception ex)
@@ -368,8 +438,8 @@ namespace SparrowGH.Components
             }
             finally
             {
+                lock (_procsLock) _procs.Clear();
                 try { File.Delete(inputPath); } catch { }
-                // Final UI refresh
                 Rhino.RhinoApp.InvokeOnUiThread(
                     new Action(() => ExpireSolution(true)));
             }
@@ -377,8 +447,11 @@ namespace SparrowGH.Components
 
         private void StopCurrentRun()
         {
-            try { _proc?.Kill(); } catch { }
-            _proc = null;
+            lock (_procsLock)
+            {
+                foreach (var p in _procs) { try { p.Kill(); } catch { } }
+                _procs.Clear();
+            }
             _ticker?.Dispose();
             _ticker = null;
             if (_state == State.Running)
@@ -386,6 +459,11 @@ namespace SparrowGH.Components
                 _state = State.Idle;
                 Message = "";
             }
+        }
+
+        private string FormatResultMessage()
+        {
+            return $"density {_cachedDensity:P1}";
         }
 
         public override void AddedToDocument(GH_Document document)
