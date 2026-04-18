@@ -23,7 +23,7 @@ namespace SparrowGH.Components
         private volatile string _errorMsg  = "";
 
         private DateTime _startTime;
-        private int      _timeBudget = 60;
+        private int      _timeBudget = 10;
 
         // Cached result
         private readonly object _lock = new object();
@@ -63,20 +63,20 @@ namespace SparrowGH.Components
                 base.ExpireDownStreamObjects();
         }
 
-        // TODO: fix icons
-        // protected override System.Drawing.Bitmap Icon => LoadIcon("SparrowGH.Resources.nest-bin.png");
-        //
-        // private static System.Drawing.Bitmap LoadIcon(string name)
-        // {
-        //     var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(name);
-        //     if (stream == null) return null!;
-        //     var original = new System.Drawing.Bitmap(stream);
-        //     var scaled = new System.Drawing.Bitmap(24, 24, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        //     using var g = System.Drawing.Graphics.FromImage(scaled);
-        //     g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-        //     g.DrawImage(original, 0, 0, 24, 24);
-        //     return scaled;
-        // }
+        // TODO: icons
+        protected override System.Drawing.Bitmap Icon => LoadIcon("SparrowGH.Resources.bin.png");
+        
+        private static System.Drawing.Bitmap LoadIcon(string name)
+        {
+            var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(name);
+            if (stream == null) return null!;
+            var original = new System.Drawing.Bitmap(stream);
+            var scaled = new System.Drawing.Bitmap(24, 24, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using var g = System.Drawing.Graphics.FromImage(scaled);
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.DrawImage(original, 0, 0, 24, 24);
+            return scaled;
+        }
 
         protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
@@ -93,15 +93,16 @@ namespace SparrowGH.Components
                 "Minimum gap between pieces in model units. 0 = no gap.",
                 GH_ParamAccess.item, 0.0);
             pManager.AddIntegerParameter("time_limit", "T",
-                "Optimisation time budget in seconds.", GH_ParamAccess.item, 60);
+                "Optimisation time budget in seconds.", GH_ParamAccess.item, 10);
             pManager.AddIntegerParameter("seeds", "S",
-                "RNG seed(s). 0 = random. Feed a flat list of multiple seeds to run them in parallel; the best result is returned and the winning seed is shown.",
+                "Seed(s): 0 = random. Feed a flat list of multiple seeds to run them in parallel; the best result is returned and the winning seed is shown. Empty = single random seed.",
                 GH_ParamAccess.list);
             pManager.AddBooleanParameter("run", "R",
-                "Connect a Button or Toggle. Fires on rising edge.",
+                "Connect a Button or Toggle.",
                 GH_ParamAccess.item, false);
 
             pManager[3].Optional = true;  // rotations
+            pManager[6].Optional = true;  // seeds
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
@@ -125,7 +126,7 @@ namespace SparrowGH.Components
             double sheetW  = 2500.0;
             double sheetH  = 1250.0;
             var angles     = new List<double>();
-            int timeSecs   = 60;
+            int timeSecs   = 10;
             double spacing = 0.0;
             var seeds      = new List<int>();
             bool run       = false;

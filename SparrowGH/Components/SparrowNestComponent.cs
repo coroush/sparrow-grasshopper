@@ -46,7 +46,7 @@ namespace SparrowGH.Components
         private readonly List<string> _log = new List<string>();
         private readonly object _logLock = new object();
         private DateTime _startTime;
-        private int _timeBudget = 30;
+        private int _timeBudget = 10;
 
         // Cached result (written once by bg thread, read by UI thread)
         private readonly object _lock = new object();
@@ -84,20 +84,20 @@ namespace SparrowGH.Components
                 base.ExpireDownStreamObjects();
         }
 
-        // TODO: fix icons
-        // protected override System.Drawing.Bitmap Icon => LoadIcon("SparrowGH.Resources.nest-roll.png");
-        //
-        // private static System.Drawing.Bitmap LoadIcon(string name)
-        // {
-        //     var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(name);
-        //     if (stream == null) return null!;
-        //     var original = new System.Drawing.Bitmap(stream);
-        //     var scaled = new System.Drawing.Bitmap(24, 24, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        //     using var g = System.Drawing.Graphics.FromImage(scaled);
-        //     g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-        //     g.DrawImage(original, 0, 0, 24, 24);
-        //     return scaled;
-        // }
+        // TODO: icons
+        protected override System.Drawing.Bitmap Icon => LoadIcon("SparrowGH.Resources.strip.png");
+        
+        private static System.Drawing.Bitmap LoadIcon(string name)
+        {
+            var stream = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(name);
+            if (stream == null) return null!;
+            var original = new System.Drawing.Bitmap(stream);
+            var scaled = new System.Drawing.Bitmap(24, 24, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using var g = System.Drawing.Graphics.FromImage(scaled);
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.DrawImage(original, 0, 0, 24, 24);
+            return scaled;
+        }
 
         protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
@@ -115,15 +115,16 @@ namespace SparrowGH.Components
                 GH_ParamAccess.item, 0.0);
             pManager.AddIntegerParameter("time_limit", "T",
                 "Optimisation time budget in seconds.",
-                GH_ParamAccess.item, 30);
+                GH_ParamAccess.item, 10);
             pManager.AddIntegerParameter("seeds", "S",
-                "RNG seed(s). 0 = random. Feed a flat list of multiple seeds to run them in parallel; the best result is returned and the winning seed is shown.",
+                "RNG seed(s). 0 = random. Feed a flat list of multiple seeds to run them in parallel; the best result is returned and the winning seed is shown. Empty = single random seed.",
                 GH_ParamAccess.list);
             pManager.AddBooleanParameter("run", "R",
                 "Connect a Button or Toggle. Nesting fires on the rising edge.",
                 GH_ParamAccess.item, false);
 
             pManager[2].Optional = true;
+            pManager[5].Optional = true;  // seeds
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
@@ -144,7 +145,7 @@ namespace SparrowGH.Components
             var curves    = new List<Curve>();
             double stripH = 1000.0;
             var angles    = new List<double>();
-            int timeSecs  = 30;
+            int timeSecs  = 10;
             double spacing = 0.0;
             var seeds     = new List<int>();
             bool run      = false;
