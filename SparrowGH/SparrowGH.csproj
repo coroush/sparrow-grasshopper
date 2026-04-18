@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
+    <TargetFrameworks>net48;net7.0</TargetFrameworks>
     <AssemblyName>SparrowGH</AssemblyName>
     <RootNamespace>SparrowGH</RootNamespace>
     <Nullable>enable</Nullable>
@@ -9,18 +9,22 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 
-  <ItemGroup>
-    <!-- Build against NuGet SDK so the plugin runs on both Rhino 7 and Rhino 8 on all platforms. -->
+  <!-- Rhino 7 (net48) -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <PackageReference Include="RhinoCommon" Version="7.38.24338.17001" ExcludeAssets="runtime" />
     <PackageReference Include="Grasshopper" Version="7.38.24338.17001" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+
+  <!-- Rhino 8 (net7.0) -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net7.0'">
+    <PackageReference Include="RhinoCommon" Version="8.30.26103.11001" ExcludeAssets="runtime" />
+    <PackageReference Include="Grasshopper" Version="8.30.26103.11001" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <!-- Required for 'dynamic' keyword on net48 with dotnet SDK -->
-    <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
-    <!-- Required for canvas Invalidate() calls -->
-    <Reference Include="System.Windows.Forms" />
   </ItemGroup>
 
   <ItemGroup>

@@ -191,7 +191,9 @@ namespace SparrowGH.Components
                             // Update message display only — no re-solve, no downstream trigger
                             Message = $"{_progress}\n[{(int)(DateTime.Now - _startTime).TotalSeconds}/{_timeBudget}s]";
 
+#if NET48
                             Grasshopper.Instances.ActiveCanvas?.Refresh();
+#endif
                         }));
                     else
                         { _ticker?.Dispose(); _ticker = null; }
@@ -291,6 +293,7 @@ namespace SparrowGH.Components
                     Fail("Cannot find 'sparrow' binary. Place it next to SparrowGH.gha or add it to PATH.");
                     return;
                 }
+                EnsureExecutable(bin);
 
                 string spacingArg = spacing > 0
                     ? $" -p {spacing.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
@@ -617,41 +620,54 @@ namespace SparrowGH.Components
         private static readonly bool IsWindows =
             Environment.OSVersion.Platform == PlatformID.Win32NT;
 
+        private static readonly bool IsArm64 =
+            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture ==
+            System.Runtime.InteropServices.Architecture.Arm64;
+
+        // Arch-specific name (used in yak packages); plain "sparrow" is the fallback for zip installs.
         private static string BinName =>
+            IsWindows ? "sparrow.exe" : IsArm64 ? "sparrow-arm64" : "sparrow-x64";
+
+        private static string BinNameFallback =>
             IsWindows ? "sparrow.exe" : "sparrow";
 
         private string? FindSparrowBinary()
         {
-            // 1. Next to the .gha (the normal installed location)
             string? ghaDir = Path.GetDirectoryName(
                 System.Reflection.Assembly.GetExecutingAssembly().Location);
-            if (ghaDir != null)
-            {
-                string c = Path.Combine(ghaDir, BinName);
-                if (File.Exists(c)) return c;
-            }
-
-            // 2. Desktop workspace (dev convenience)
-            string devBin = IsWindows ? "sparrow.exe" : "sparrow";
-            string dev = Path.Combine(
+            string devDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                "sparrow-grasshopper", "sparrow", "target", "release", devBin);
-            if (File.Exists(dev)) return dev;
+                "sparrow-grasshopper", "sparrow", "target", "release");
+            string pathCmd = IsWindows ? "where" : "which";
 
-            // 3. Search PATH — use 'where' on Windows, 'which' on Mac/Linux
-            try
+            foreach (string name in new[] { BinName, BinNameFallback })
             {
-                string pathCmd = IsWindows ? "where" : "which";
-                string pathArg = IsWindows ? "sparrow.exe" : "sparrow";
-                using var proc = Process.Start(new ProcessStartInfo(pathCmd, pathArg)
-                    { RedirectStandardOutput = true, UseShellExecute = false });
-                string? found = proc?.StandardOutput.ReadLine()?.Trim();
-                proc?.WaitForExit();
-                if (!string.IsNullOrEmpty(found) && File.Exists(found)) return found;
+                if (ghaDir != null) { string c = Path.Combine(ghaDir, name); if (File.Exists(c)) return c; }
+                string dev = Path.Combine(devDir, name);
+                if (File.Exists(dev)) return dev;
+                try
+                {
+                    using var proc = Process.Start(new ProcessStartInfo(pathCmd, name)
+                        { RedirectStandardOutput = true, UseShellExecute = false });
+                    string? found = proc?.StandardOutput.ReadLine()?.Trim();
+                    proc?.WaitForExit();
+                    if (!string.IsNullOrEmpty(found) && File.Exists(found)) return found;
+                }
+                catch { }
             }
-            catch { }
 
             return null;
+        }
+
+        private static void EnsureExecutable(string path)
+        {
+            if (IsWindows) return;
+            try
+            {
+                Process.Start(new ProcessStartInfo("chmod", $"+x \"{path}\"")
+                    { UseShellExecute = false })?.WaitForExit();
+            }
+            catch { }
         }
 
         // ── JSON model classes ────────────────────────────────────────────────────

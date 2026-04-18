@@ -10,9 +10,9 @@ namespace SparrowGH
         public override Bitmap? Icon => null;
         public override string Description =>
             "Grasshopper bridge for Sparrow — state-of-the-art 2D irregular strip packing (nesting).";
-        public override Guid Id => new Guid("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
-        public override string AuthorName => "";
-        public override string AuthorContact => "";
-        public override string Version => "0.1.0";
+        public override Guid Id => new Guid("350e655d-11e3-4ff8-be38-88e1caa8e821");
+        public override string AuthorName => "Soroush Garivani";
+        public override string AuthorContact => "soroushgarivani@gmail.com";
+        public override string Version => "0.2.3";
     }
 }

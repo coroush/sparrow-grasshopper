@@ -171,7 +171,9 @@ namespace SparrowGH.Components
                             // Update message display only — no re-solve, no downstream trigger
                             Message = $"{_progress}\n[{(int)(DateTime.Now - _startTime).TotalSeconds}/{_timeBudget}s]";
 
+#if NET48
                             Grasshopper.Instances.ActiveCanvas?.Refresh();
+#endif
                         }));
                     else
                         { _ticker?.Dispose(); _ticker = null; }
@@ -238,6 +240,7 @@ namespace SparrowGH.Components
                     Fail("Cannot find 'sparrow' binary. Place it next to SparrowGH.gha or add it to PATH.");
                     return;
                 }
+                EnsureExecutable(bin);
 
                 string spacingArg = spacing > 0
                     ? $" -p {spacing.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
@@ -583,26 +586,51 @@ namespace SparrowGH.Components
 
         private static readonly bool IsWindows =
             Environment.OSVersion.Platform == PlatformID.Win32NT;
-        private static string BinName => IsWindows ? "sparrow.exe" : "sparrow";
+
+        private static readonly bool IsArm64 =
+            System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture ==
+            System.Runtime.InteropServices.Architecture.Arm64;
+
+        private static string BinName =>
+            IsWindows ? "sparrow.exe" : IsArm64 ? "sparrow-arm64" : "sparrow-x64";
+
+        private static string BinNameFallback =>
+            IsWindows ? "sparrow.exe" : "sparrow";
 
         private string? FindSparrowBinary()
         {
             string? ghaDir = Path.GetDirectoryName(
                 System.Reflection.Assembly.GetExecutingAssembly().Location);
-            if (ghaDir != null) { string c = Path.Combine(ghaDir, BinName); if (File.Exists(c)) return c; }
+            string devDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+                "sparrow-grasshopper", "sparrow", "target", "release");
+            string pathCmd = IsWindows ? "where" : "which";
 
-            string dev = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                "sparrow-grasshopper", "sparrow", "target", "release", BinName);
-            if (File.Exists(dev)) return dev;
-
-            try {
-                using var p = Process.Start(new ProcessStartInfo(IsWindows ? "where" : "which", BinName)
-                    { RedirectStandardOutput = true, UseShellExecute = false });
-                string? found = p?.StandardOutput.ReadLine()?.Trim();
-                p?.WaitForExit();
-                if (!string.IsNullOrEmpty(found) && File.Exists(found)) return found;
-            } catch { }
+            foreach (string name in new[] { BinName, BinNameFallback })
+            {
+                if (ghaDir != null) { string c = Path.Combine(ghaDir, name); if (File.Exists(c)) return c; }
+                string dev = Path.Combine(devDir, name);
+                if (File.Exists(dev)) return dev;
+                try {
+                    using var p = Process.Start(new ProcessStartInfo(pathCmd, name)
+                        { RedirectStandardOutput = true, UseShellExecute = false });
+                    string? found = p?.StandardOutput.ReadLine()?.Trim();
+                    p?.WaitForExit();
+                    if (!string.IsNullOrEmpty(found) && File.Exists(found)) return found;
+                } catch { }
+            }
             return null;
+        }
+
+        private static void EnsureExecutable(string path)
+        {
+            if (IsWindows) return;
+            try
+            {
+                Process.Start(new ProcessStartInfo("chmod", $"+x \"{path}\"")
+                    { UseShellExecute = false })?.WaitForExit();
+            }
+            catch { }
         }
 
         // ── JSON models ───────────────────────────────────────────────────────────
