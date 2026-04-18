@@ -8,9 +8,15 @@ The grasshopper components run on a background thread and are non-blocking.
 
 ## Installation
 
-1. Go to the [Releases](../../releases) page and download the zip for your platform (`mac-arm64`, `mac-x64`, or `windows-x64`).
-2. Extract and copy the three files into your Grasshopper Libraries folder
-3. Restart Rhino. A **Sparrow** tab will appear in Grasshopper with two components.
+Using Rhino Package manager:
+- Run `PackageManager` command in Rhino.
+- Search for `sparrow` and install.
+
+or:
+- Go to the [Releases](../../releases) page and download the zip for your platform (`mac-arm64`, `mac-x64`, or `windows-x64`).
+- Extract and copy the three files into your Grasshopper Libraries folder
+
+Restart Rhino. A **Sparrow** tab will appear in Grasshopper with two components.
 
 
 ## Components
@@ -39,7 +45,7 @@ Nests closed planar curves into *a strip* of fixed height and *variable width*. 
 - Input multiple `seeds` (for example: [1, 2, 3]); the solver will return the best result - processes will run in parallel with the same time limit.
 - Disable a running component to kill the engine process immediately.
 - Results are cached — the last successful run is shown until you press Run again.
-- The engine communicates via JSON in the system temp directory. no FFI, no network.
+- The engine communicates via JSON in the system temp directory.
 - For build instructions and input format details see [`README_dev.md`](README_dev.md).
 
 
