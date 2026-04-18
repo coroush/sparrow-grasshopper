@@ -4,6 +4,7 @@ A Grasshopper plugin for 2D irregular nesting, built on top of [Sparrow](https:/
 
 This fork extends the original Sparrow engine with **bin packing** (nesting onto multiple fixed-size sheets) alongside the original **strip packing** mode. Both are exposed as Grasshopper components.
 
+The grasshopper components run on a background thread and are non-blocking.
 
 ## Installation
 
@@ -35,7 +36,7 @@ Nests closed planar curves into *a strip* of fixed height and *variable width*. 
 
 
 ## Notes
-
+- Input multiple `seeds` (for example: [1, 2, 3]); the solver will return the best result - processes will run in parallel with the same time limit.
 - Disable a running component to kill the engine process immediately.
 - Results are cached — the last successful run is shown until you press Run again.
 - The engine communicates via JSON in the system temp directory. no FFI, no network.
