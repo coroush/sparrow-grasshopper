@@ -52,4 +52,4 @@ Nests closed planar curves into *a strip* of fixed height and *variable width*. 
 ## License
 
 Plugin code: MIT.  
-Engine: see [`sparrow/LICENSE`](sparrow/LICENSE).
+Engine: see [`sparrow/LICENSE`](https://github.com/JeroenGar/sparrow/blob/main/LICENSE).
