@@ -34,7 +34,8 @@ echo "▶ Building SparrowGH.gha (Rhino 7 + Rhino 8)..."
 DLL7=SparrowGH/bin/Release/net48/SparrowGH.dll
 DLL8=SparrowGH/bin/Release/net7.0/SparrowGH.dll
 JSON=SparrowGH/bin/Release/net48/Newtonsoft.Json.dll
-JSON8=$JSON
+JSON8=SparrowGH/bin/Release/net7.0/Newtonsoft.Json.dll
+DEPS8=SparrowGH/bin/Release/net7.0/SparrowGH.deps.json
 DLL=$DLL7
 
 stage() {
@@ -82,24 +83,46 @@ cp dist/manifest.yml "$YAK_WIN/manifest.yml"
 mv "$YAK_WIN"/sparrow-*.yak dist/ 2>/dev/null || true
 echo "  ✓ dist/sparrow-*-win.yak"
 
-# Rhino 8 mac yak
+# Rhino 8 mac yak — multi-targeted (net48 + net7.0).
+# Rhino loads net7.0/ in standalone Rhino 8 (.NET Core) and net48/ under
+# Rhino.Inside hosts running on .NET Framework (AutoCAD, older Revit).
+# manifest.yml stays at the package root; gha + deps live in the fw subfolders.
 YAK_MAC8=dist/yak-mac8
-mkdir -p "$YAK_MAC8"
-cp "$DLL8"  "$YAK_MAC8/SparrowGH.gha"
-cp "$JSON8" "$YAK_MAC8/Newtonsoft.Json.dll"
-cp sparrow/target/release/sparrow                      "$YAK_MAC8/sparrow-arm64" && chmod +x "$YAK_MAC8/sparrow-arm64"
-cp sparrow/target/x86_64-apple-darwin/release/sparrow  "$YAK_MAC8/sparrow-x64"  && chmod +x "$YAK_MAC8/sparrow-x64"
+rm -rf "$YAK_MAC8"
+mkdir -p "$YAK_MAC8/net48" "$YAK_MAC8/net7.0"
+
+cp "$DLL7" "$YAK_MAC8/net48/SparrowGH.gha"
+cp "$JSON" "$YAK_MAC8/net48/Newtonsoft.Json.dll"
+cp sparrow/target/release/sparrow                     "$YAK_MAC8/net48/sparrow-arm64" && chmod +x "$YAK_MAC8/net48/sparrow-arm64"
+cp sparrow/target/x86_64-apple-darwin/release/sparrow "$YAK_MAC8/net48/sparrow-x64"  && chmod +x "$YAK_MAC8/net48/sparrow-x64"
+
+cp "$DLL8"  "$YAK_MAC8/net7.0/SparrowGH.gha"
+cp "$JSON8" "$YAK_MAC8/net7.0/Newtonsoft.Json.dll"
+cp "$DEPS8" "$YAK_MAC8/net7.0/SparrowGH.deps.json"
+cp sparrow/target/release/sparrow                     "$YAK_MAC8/net7.0/sparrow-arm64" && chmod +x "$YAK_MAC8/net7.0/sparrow-arm64"
+cp sparrow/target/x86_64-apple-darwin/release/sparrow "$YAK_MAC8/net7.0/sparrow-x64"  && chmod +x "$YAK_MAC8/net7.0/sparrow-x64"
+
 cp dist/manifest.yml "$YAK_MAC8/manifest.yml"
 (cd "$YAK_MAC8" && "$YAK" build --platform mac)
 mv "$YAK_MAC8"/sparrow-*.yak dist/ 2>/dev/null || true
 echo "  ✓ dist/sparrow-*-rh8-mac.yak"
 
-# Rhino 8 win yak
+# Rhino 8 win yak — multi-targeted (net48 + net7.0).
+# net48/ is what Rhino.Inside.AutoCAD (Rhino 8 on .NET Framework 4.8) loads;
+# net7.0/ is what standalone Rhino 8 (.NET Core) loads.
 YAK_WIN8=dist/yak-win8
-mkdir -p "$YAK_WIN8"
-cp "$DLL8"  "$YAK_WIN8/SparrowGH.gha"
-cp "$JSON8" "$YAK_WIN8/Newtonsoft.Json.dll"
-cp sparrow/target/x86_64-pc-windows-gnu/release/sparrow.exe "$YAK_WIN8/sparrow.exe"
+rm -rf "$YAK_WIN8"
+mkdir -p "$YAK_WIN8/net48" "$YAK_WIN8/net7.0"
+
+cp "$DLL7" "$YAK_WIN8/net48/SparrowGH.gha"
+cp "$JSON" "$YAK_WIN8/net48/Newtonsoft.Json.dll"
+cp sparrow/target/x86_64-pc-windows-gnu/release/sparrow.exe "$YAK_WIN8/net48/sparrow.exe"
+
+cp "$DLL8"  "$YAK_WIN8/net7.0/SparrowGH.gha"
+cp "$JSON8" "$YAK_WIN8/net7.0/Newtonsoft.Json.dll"
+cp "$DEPS8" "$YAK_WIN8/net7.0/SparrowGH.deps.json"
+cp sparrow/target/x86_64-pc-windows-gnu/release/sparrow.exe "$YAK_WIN8/net7.0/sparrow.exe"
+
 cp dist/manifest.yml "$YAK_WIN8/manifest.yml"
 (cd "$YAK_WIN8" && "$YAK" build --platform win)
 mv "$YAK_WIN8"/sparrow-*.yak dist/ 2>/dev/null || true

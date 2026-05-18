@@ -18,6 +18,11 @@
   </ItemGroup>
 
   <!-- Rhino 8 (net7.0) -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net7.0'">
+    <!-- Emit Newtonsoft.Json.dll (net6.0) next to the gha so the Rhino 8
+         package can ship the matching dependency instead of the net45 copy. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net7.0'">
     <PackageReference Include="RhinoCommon" Version="8.30.26103.11001" ExcludeAssets="runtime" />
     <PackageReference Include="Grasshopper" Version="8.30.26103.11001" ExcludeAssets="runtime" />

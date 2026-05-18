@@ -13,6 +13,6 @@ namespace SparrowGH
         public override Guid Id => new Guid("350e655d-11e3-4ff8-be38-88e1caa8e821");
         public override string AuthorName => "Soroush Garivani";
         public override string AuthorContact => "soroushgarivani@gmail.com";
-        public override string Version => "0.2.3";
+        public override string Version => "0.2.5";
     }
 }
